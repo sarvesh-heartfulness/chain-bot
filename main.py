@@ -1,0 +1,217 @@
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, EmailStr, Field
+import uvicorn
+import json
+import os
+import uuid
+import re
+from datetime import datetime
+from typing import Dict, List, Optional
+
+
+class RegistrationStep(BaseModel):
+    conversation_id: str
+    current_step: str
+    user_input: Optional[str] = None
+
+
+class RegistrationData(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+    age_group: Optional[str] = Field(None, pattern="^(18-25|26-40|41-60|61+)$")
+    meditation_experience: Optional[str] = Field(
+        None, pattern="^(Beginner|Intermediate|Advanced)$"
+    )
+
+
+class ConversationManager:
+    def __init__(self, conversations_file: str = "conversations.json"):
+        self.conversations_file = conversations_file
+        self.conversations = self._load_conversations()
+
+    def _load_conversations(self) -> List[Dict]:
+        if not os.path.exists(self.conversations_file):
+            return []
+
+        try:
+            with open(self.conversations_file, "r") as file:
+                return json.load(file)
+        except (json.JSONDecodeError, IOError):
+            return []
+
+    def _save_conversations(self):
+        try:
+            with open(self.conversations_file, "w") as file:
+                json.dump(self.conversations, file, indent=2)
+        except IOError:
+            print("Error saving conversations.")
+
+    def validate_email(self, email: str) -> bool:
+        email_regex = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+        return re.match(email_regex, email) is not None
+
+    def validate_phone(self, phone: str) -> bool:
+        phone_regex = r"^\+?1?\d{10,14}$"
+        return re.match(phone_regex, phone) is not None
+
+    def start_conversation(self) -> str:
+        conversation_id = str(uuid.uuid4())
+        conversation = {
+            "id": conversation_id,
+            "timestamp": datetime.now().isoformat(),
+            "steps": [],
+            "current_step": "start",
+            "registration_data": {},
+        }
+        self.conversations.append(conversation)
+        self._save_conversations()
+        return conversation_id
+
+    def process_step(self, conversation_id: str, step: RegistrationStep) -> Dict:
+        conversation = next(
+            (conv for conv in self.conversations if conv["id"] == conversation_id), None
+        )
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+        if conversation["current_step"] == "start":
+            conversation["current_step"] = "name"
+            return {"next_step": "name", "next_step_message": "Enter your full name"}
+
+        elif conversation["current_step"] == "name":
+            if not step.user_input or len(step.user_input) < 2:
+                return {
+                    "error": "Please enter a valid name (at least 2 characters)",
+                    "error_step": "name",
+                }
+            conversation["registration_data"]["full_name"] = step.user_input
+            conversation["current_step"] = "email"
+            return {
+                "next_step": "email",
+                "next_step_message": "Enter your email address",
+            }
+
+        elif conversation["current_step"] == "email":
+            if not self.validate_email(step.user_input):
+                return {
+                    "error": "Please enter a valid email address",
+                    "error_step": "email",
+                }
+            conversation["registration_data"]["email"] = step.user_input
+            conversation["current_step"] = "phone"
+            return {
+                "next_step": "phone",
+                "next_step_message": "Enter your phone number",
+            }
+
+        elif conversation["current_step"] == "phone":
+            if not self.validate_phone(step.user_input):
+                return {
+                    "error": "Please enter a valid phone number",
+                    "error_step": "phone",
+                }
+            conversation["registration_data"]["phone"] = step.user_input
+            conversation["current_step"] = "age_group"
+            return {
+                "next_step": "age_group",
+                "next_step_message": "Select your age group",
+                "options": [
+                    {"value": "18-25", "label": "18-25"},
+                    {"value": "26-40", "label": "26-40"},
+                    {"value": "41-60", "label": "41-60"},
+                    {"value": "61+", "label": "61+"},
+                ],
+            }
+
+        elif conversation["current_step"] == "age_group":
+            age_groups = ["18-25", "26-40", "41-60", "61+"]
+            if step.user_input not in age_groups:
+                return {
+                    "error": "Invalid age group selection",
+                    "error_step": "age_group",
+                }
+            conversation["registration_data"]["age_group"] = step.user_input
+            conversation["current_step"] = "meditation_experience"
+            return {
+                "next_step": "meditation_experience",
+                "next_step_message": "Select your meditation experience",
+                "options": [
+                    {"value": "Beginner", "label": "Beginner"},
+                    {"value": "Intermediate", "label": "Intermediate"},
+                    {"value": "Advanced", "label": "Advanced"},
+                ],
+            }
+
+        elif conversation["current_step"] == "meditation_experience":
+            exp_levels = ["Beginner", "Intermediate", "Advanced"]
+            if step.user_input not in exp_levels:
+                return {
+                    "error": "Invalid meditation experience selection",
+                    "error_step": "meditation_experience",
+                }
+            conversation["registration_data"]["meditation_experience"] = step.user_input
+            conversation["current_step"] = "confirmation"
+            return {
+                "next_step": "confirmation",
+                "next_step_message": "Confirm your registration details",
+                "registration_data": conversation["registration_data"],
+            }
+
+        elif conversation["current_step"] == "confirmation":
+            if step.user_input.lower() in ["yes", "y"]:
+                conversation["registration_data"]["registration_timestamp"] = (
+                    datetime.now().isoformat()
+                )
+                conversation["current_step"] = "completed"
+                self._save_conversations()
+                return {
+                    "next_step": "completed",
+                    "next_step_message": "Registration completed successfully!",
+                    "message": "Registration completed",
+                    "conversation_id": conversation_id,
+                }
+            else:
+                conversation["current_step"] = "cancelled"
+                return {
+                    "next_step": "cancelled",
+                    "next_step_message": "Registration cancelled",
+                    "message": "Registration cancelled",
+                }
+
+        self._save_conversations()
+        raise HTTPException(status_code=400, detail="Invalid conversation state")
+
+
+# Initialize FastAPI
+app = FastAPI(title="Bhandara Event Registration API")
+
+# CORS Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Global conversation manager
+conversation_manager = ConversationManager()
+
+
+@app.post("/start")
+def start_conversation():
+    """Start a new conversation"""
+    conversation_id = conversation_manager.start_conversation()
+    return {"conversation_id": conversation_id}
+
+
+@app.post("/process")
+def process_registration_step(step: RegistrationStep):
+    """Process a registration step"""
+    return conversation_manager.process_step(step.conversation_id, step)
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
