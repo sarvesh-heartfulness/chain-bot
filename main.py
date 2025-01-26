@@ -10,6 +10,16 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 
+class TravelRequirements(BaseModel):
+    transport_mode: str
+    arrival_location: str
+
+
+class AccommodationDetails(BaseModel):
+    type: str
+    number_of_people: int
+
+
 class RegistrationStep(BaseModel):
     conversation_id: str
     current_step: str
@@ -17,13 +27,15 @@ class RegistrationStep(BaseModel):
 
 
 class RegistrationData(BaseModel):
-    full_name: Optional[str] = None
-    email: Optional[EmailStr] = None
-    phone: Optional[str] = None
-    age_group: Optional[str] = Field(None, pattern="^(18-25|26-40|41-60|61+)$")
-    meditation_experience: Optional[str] = Field(
-        None, pattern="^(Beginner|Intermediate|Advanced)$"
-    )
+    full_name: str
+    email: EmailStr
+    mobile: str
+    age_group: str = Field(..., pattern="^(18-25|26-40|41-60|61+)$")
+    abhyasi_id: str
+    arrival_date: str
+    departure_date: str
+    travel_requirements: Optional[TravelRequirements] = None
+    accommodation: Optional[AccommodationDetails] = None
 
 
 class ConversationManager:
@@ -56,6 +68,13 @@ class ConversationManager:
         phone_regex = r"^\+?1?\d{10,14}$"
         return re.match(phone_regex, phone) is not None
 
+    def validate_date(self, date_str: str) -> bool:
+        try:
+            datetime.strptime(date_str, "%d-%m-%Y")
+            return True
+        except ValueError:
+            return False
+
     def start_conversation(self) -> str:
         conversation_id = str(uuid.uuid4())
         conversation = {
@@ -71,10 +90,12 @@ class ConversationManager:
 
     def process_step(self, conversation_id: str, step: RegistrationStep) -> Dict:
         conversation = next(
-            (conv for conv in self.conversations if conv["id"] == conversation_id), None
+            (conv for conv in self.conversations if conv["id"]
+             == conversation_id), None
         )
         if not conversation:
-            raise HTTPException(status_code=404, detail="Conversation not found")
+            raise HTTPException(
+                status_code=404, detail="Conversation not found")
 
         if conversation["current_step"] == "start":
             conversation["current_step"] = "name"
@@ -100,29 +121,24 @@ class ConversationManager:
                     "error_step": "email",
                 }
             conversation["registration_data"]["email"] = step.user_input
-            conversation["current_step"] = "phone"
+            conversation["current_step"] = "mobile"
             return {
-                "next_step": "phone",
-                "next_step_message": "Enter your phone number",
+                "next_step": "mobile",
+                "next_step_message": "Enter your mobile number",
             }
 
-        elif conversation["current_step"] == "phone":
+        elif conversation["current_step"] == "mobile":
             if not self.validate_phone(step.user_input):
                 return {
-                    "error": "Please enter a valid phone number",
-                    "error_step": "phone",
+                    "error": "Please enter a valid mobile number",
+                    "error_step": "mobile",
                 }
-            conversation["registration_data"]["phone"] = step.user_input
+            conversation["registration_data"]["mobile"] = step.user_input
             conversation["current_step"] = "age_group"
             return {
                 "next_step": "age_group",
                 "next_step_message": "Select your age group",
-                "options": [
-                    {"value": "18-25", "label": "18-25"},
-                    {"value": "26-40", "label": "26-40"},
-                    {"value": "41-60", "label": "41-60"},
-                    {"value": "61+", "label": "61+"},
-                ],
+                "options": ["18-25", "26-40", "41-60", "61+"],
             }
 
         elif conversation["current_step"] == "age_group":
@@ -133,25 +149,158 @@ class ConversationManager:
                     "error_step": "age_group",
                 }
             conversation["registration_data"]["age_group"] = step.user_input
-            conversation["current_step"] = "meditation_experience"
+            conversation["current_step"] = "abhyasi_id"
             return {
-                "next_step": "meditation_experience",
-                "next_step_message": "Select your meditation experience",
-                "options": [
-                    {"value": "Beginner", "label": "Beginner"},
-                    {"value": "Intermediate", "label": "Intermediate"},
-                    {"value": "Advanced", "label": "Advanced"},
-                ],
+                "next_step": "abhyasi_id",
+                "next_step_message": "Enter your Abhyasi ID",
             }
 
-        elif conversation["current_step"] == "meditation_experience":
-            exp_levels = ["Beginner", "Intermediate", "Advanced"]
-            if step.user_input not in exp_levels:
+        elif conversation["current_step"] == "abhyasi_id":
+            if not step.user_input or len(step.user_input) < 4:
                 return {
-                    "error": "Invalid meditation experience selection",
-                    "error_step": "meditation_experience",
+                    "error": "Please enter a valid Abhyasi ID",
+                    "error_step": "abhyasi_id",
                 }
-            conversation["registration_data"]["meditation_experience"] = step.user_input
+            conversation["registration_data"]["abhyasi_id"] = step.user_input
+            conversation["current_step"] = "arrival_date"
+            return {
+                "next_step": "arrival_date",
+                "next_step_message": "Enter your arrival date (DD-MM-YYYY)",
+            }
+
+        elif conversation["current_step"] == "arrival_date":
+            if not self.validate_date(step.user_input):
+                return {
+                    "error": "Please enter a valid date (DD-MM-YYYY format)",
+                    "error_step": "arrival_date",
+                }
+            conversation["registration_data"]["arrival_date"] = step.user_input
+            conversation["current_step"] = "departure_date"
+            return {
+                "next_step": "departure_date",
+                "next_step_message": "Enter your departure date (DD-MM-YYYY)",
+            }
+
+        elif conversation["current_step"] == "departure_date":
+            if not self.validate_date(step.user_input):
+                return {
+                    "error": "Please enter a valid date (DD-MM-YYYY format)",
+                    "error_step": "departure_date",
+                }
+            conversation["registration_data"]["departure_date"] = step.user_input
+            conversation["current_step"] = "travel_requirements_confirmation"
+            return {
+                "next_step": "travel_requirements_confirmation",
+                "next_step_message": "Do you have any travel requirements? (yes/no)",
+            }
+
+        elif conversation["current_step"] == "travel_requirements_confirmation":
+            if step.user_input.lower() in ["yes", "y"]:
+                conversation["current_step"] = "travel_requirements_mode"
+                return {
+                    "next_step": "travel_requirements_mode",
+                    "next_step_message": "Select transport mode",
+                    "options": ["Air", "Train", "Bus", "Car"]
+                }
+            elif step.user_input.lower() in ["no", "n"]:
+                conversation["current_step"] = "accommodation_confirmation"
+                return {
+                    "next_step": "accommodation_confirmation",
+                    "next_step_message": "Do you need accommodation? (yes/no)",
+                }
+            else:
+                return {
+                    "error": "Please answer yes or no",
+                    "error_step": "travel_requirements_confirmation",
+                }
+
+        elif conversation["current_step"] == "travel_requirements_mode":
+            transport_modes = ["air", "train", "bus", "car"]
+            if step.user_input.lower() not in transport_modes:
+                return {
+                    "error": "Invalid transport mode",
+                    "error_step": "travel_requirements_mode",
+                    "options": transport_modes
+                }
+
+            conversation["temp_travel_requirements"] = {
+                "transport_mode": step.user_input.lower()}
+            conversation["current_step"] = "travel_requirements_location"
+            return {
+                "next_step": "travel_requirements_location",
+                "next_step_message": "Enter your arrival location",
+            }
+
+        elif conversation["current_step"] == "travel_requirements_location":
+            if not step.user_input:
+                return {
+                    "error": "Please provide arrival location",
+                    "error_step": "travel_requirements_location",
+                }
+
+            conversation["temp_travel_requirements"]["arrival_location"] = step.user_input
+            conversation["registration_data"]["travel_requirements"] = conversation["temp_travel_requirements"]
+            del conversation["temp_travel_requirements"]
+
+            conversation["current_step"] = "accommodation_confirmation"
+            return {
+                "next_step": "accommodation_confirmation",
+                "next_step_message": "Do you need accommodation? (yes/no)",
+            }
+
+        elif conversation["current_step"] == "accommodation_confirmation":
+            if step.user_input.lower() in ["yes", "y"]:
+                conversation["current_step"] = "accommodation_type"
+                return {
+                    "next_step": "accommodation_type",
+                    "next_step_message": "Select accommodation type",
+                    "options": ["Dormitory", "Guest House", "Single Room", "Shared Room"]
+                }
+            elif step.user_input.lower() in ["no", "n"]:
+                conversation["current_step"] = "confirmation"
+                return {
+                    "next_step": "confirmation",
+                    "next_step_message": "Confirm your registration details",
+                    "registration_data": conversation["registration_data"],
+                }
+            else:
+                return {
+                    "error": "Please answer yes or no",
+                    "error_step": "accommodation_confirmation",
+                }
+
+        elif conversation["current_step"] == "accommodation_type":
+            accommodation_types = ["Dormitory",
+                                   "Guest House", "Single Room", "Shared Room"]
+            if step.user_input not in accommodation_types:
+                return {
+                    "error": "Invalid accommodation type",
+                    "error_step": "accommodation_type",
+                    "options": accommodation_types
+                }
+
+            conversation["temp_accommodation"] = {"type": step.user_input}
+            conversation["current_step"] = "accommodation_people"
+            return {
+                "next_step": "accommodation_people",
+                "next_step_message": "Enter number of people for accommodation",
+            }
+
+        elif conversation["current_step"] == "accommodation_people":
+            try:
+                people_count = int(step.user_input)
+                if people_count < 1 or people_count > 10:
+                    raise ValueError
+            except ValueError:
+                return {
+                    "error": "Please enter a valid number of people (1-10)",
+                    "error_step": "accommodation_people",
+                }
+
+            conversation["temp_accommodation"]["number_of_people"] = people_count
+            conversation["registration_data"]["accommodation"] = conversation["temp_accommodation"]
+            del conversation["temp_accommodation"]
+
             conversation["current_step"] = "confirmation"
             return {
                 "next_step": "confirmation",
@@ -161,15 +310,13 @@ class ConversationManager:
 
         elif conversation["current_step"] == "confirmation":
             if step.user_input.lower() in ["yes", "y"]:
-                conversation["registration_data"]["registration_timestamp"] = (
-                    datetime.now().isoformat()
-                )
+                conversation["registration_data"]["registration_timestamp"] = datetime.now(
+                ).isoformat()
                 conversation["current_step"] = "completed"
                 self._save_conversations()
                 return {
                     "next_step": "completed",
                     "next_step_message": "Registration completed successfully!",
-                    "message": "Registration completed",
                     "conversation_id": conversation_id,
                 }
             else:
@@ -177,11 +324,11 @@ class ConversationManager:
                 return {
                     "next_step": "cancelled",
                     "next_step_message": "Registration cancelled",
-                    "message": "Registration cancelled",
                 }
 
         self._save_conversations()
-        raise HTTPException(status_code=400, detail="Invalid conversation state")
+        raise HTTPException(
+            status_code=400, detail="Invalid conversation state")
 
 
 # Initialize FastAPI
@@ -204,16 +351,6 @@ conversation_manager = ConversationManager()
 def start_conversation():
     """
     Initiate a new registration conversation.
-
-    Returns:
-    ---
-        dict: A dictionary containing a unique conversation ID for tracking
-              the registration process.
-
-    Example:
-        {
-            "conversation_id": "123e4567-e89b-12d3-a456-426614174000"
-        }
     """
     conversation_id = conversation_manager.start_conversation()
     return {"conversation_id": conversation_id}
@@ -223,27 +360,6 @@ def start_conversation():
 def process_registration_step(step: RegistrationStep):
     """
     Process a single step in the registration workflow.
-
-    Args:
-    ---
-        step (RegistrationStep): Contains conversation details and user input.
-            - conversation_id (str): Unique identifier for the current conversation
-            - current_step (str): Current stage in registration process
-            - user_input (str, optional): User's response at current step
-
-    Returns:
-    ---
-        dict: Response containing:
-            - next_step (str): Identifier for the next registration step
-            - next_step_message (str): Instruction or prompt for the next step
-            - options (list, optional): Selectable options for certain steps
-            - registration_data (dict, optional): Collected registration information
-            - error (str, optional): Validation error message
-            - error_step (str, optional): Step where validation failed
-
-    Raises:
-    ---
-        HTTPException: If conversation is not found or in an invalid state
     """
     return conversation_manager.process_step(step.conversation_id, step)
 
@@ -257,17 +373,6 @@ def list_registrations(
 ):
     """
     Retrieve a list of completed registrations.
-
-    Args:
-    ---
-        skip (int, optional): Number of registrations to skip for pagination. Defaults to 0.
-        limit (int, optional): Maximum number of registrations to return. Defaults to 100.
-        sort_by (str, optional): Field to sort registrations by. Defaults to "timestamp".
-        sort_order (str, optional): Sort order - "asc" or "desc". Defaults to "desc".
-
-    Returns:
-    ---
-        dict: A list of completed registrations with total count
     """
     # Filter only completed registrations
     completed_registrations = [
@@ -285,7 +390,7 @@ def list_registrations(
 
     # Pagination
     total_count = len(completed_registrations)
-    paginated_registrations = completed_registrations[skip : skip + limit]
+    paginated_registrations = completed_registrations[skip: skip + limit]
 
     return {
         "registrations": paginated_registrations,
