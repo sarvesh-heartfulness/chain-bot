@@ -202,15 +202,97 @@ conversation_manager = ConversationManager()
 
 @app.post("/start")
 def start_conversation():
-    """Start a new conversation"""
+    """
+    Initiate a new registration conversation.
+
+    Returns:
+    ---
+        dict: A dictionary containing a unique conversation ID for tracking
+              the registration process.
+
+    Example:
+        {
+            "conversation_id": "123e4567-e89b-12d3-a456-426614174000"
+        }
+    """
     conversation_id = conversation_manager.start_conversation()
     return {"conversation_id": conversation_id}
 
 
 @app.post("/process")
 def process_registration_step(step: RegistrationStep):
-    """Process a registration step"""
+    """
+    Process a single step in the registration workflow.
+
+    Args:
+    ---
+        step (RegistrationStep): Contains conversation details and user input.
+            - conversation_id (str): Unique identifier for the current conversation
+            - current_step (str): Current stage in registration process
+            - user_input (str, optional): User's response at current step
+
+    Returns:
+    ---
+        dict: Response containing:
+            - next_step (str): Identifier for the next registration step
+            - next_step_message (str): Instruction or prompt for the next step
+            - options (list, optional): Selectable options for certain steps
+            - registration_data (dict, optional): Collected registration information
+            - error (str, optional): Validation error message
+            - error_step (str, optional): Step where validation failed
+
+    Raises:
+    ---
+        HTTPException: If conversation is not found or in an invalid state
+    """
     return conversation_manager.process_step(step.conversation_id, step)
+
+
+@app.get("/registrations")
+def list_registrations(
+    skip: int = 0,
+    limit: int = 100,
+    sort_by: str = "timestamp",
+    sort_order: str = "desc",
+):
+    """
+    Retrieve a list of completed registrations.
+
+    Args:
+    ---
+        skip (int, optional): Number of registrations to skip for pagination. Defaults to 0.
+        limit (int, optional): Maximum number of registrations to return. Defaults to 100.
+        sort_by (str, optional): Field to sort registrations by. Defaults to "timestamp".
+        sort_order (str, optional): Sort order - "asc" or "desc". Defaults to "desc".
+
+    Returns:
+    ---
+        dict: A list of completed registrations with total count
+    """
+    # Filter only completed registrations
+    completed_registrations = [
+        conv["registration_data"]
+        for conv in conversation_manager.conversations
+        if conv.get("current_step") == "completed"
+    ]
+
+    # Sort registrations
+    if sort_by == "timestamp":
+        completed_registrations.sort(
+            key=lambda x: x.get("registration_timestamp", ""),
+            reverse=(sort_order == "desc"),
+        )
+
+    # Pagination
+    total_count = len(completed_registrations)
+    paginated_registrations = completed_registrations[skip : skip + limit]
+
+    return {
+        "registrations": paginated_registrations,
+        "total_count": total_count,
+        "skip": skip,
+        "limit": limit,
+    }
 
 
 if __name__ == "__main__":
